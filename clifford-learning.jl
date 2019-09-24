@@ -1,4 +1,3 @@
-
 include("random_clifford/Initial.jl")
 include("random_clifford/Symplectic.jl")
 
@@ -11,11 +10,9 @@ using YaoExtensions
 using QuAlgorithmZoo: Adam, update!
 using LinearAlgebra
 
-n_qubits = 5
-n_circuits = 100
+n_qubits = 8
+n_circuits = 20
 n = n_qubits;
-
-n_clifford_circuits = max(getNumberOfSymplecticCliffords(n), 2^63-1)
 
 function parseCommand(command)
     if command[1] == "hadamard"
@@ -38,10 +35,6 @@ function getRandomCircuit(i)
     return circuit
 end
 
-list_circuits = [getRandomCircuit(i) for i in 1:n_circuits];
-
-W = 1/n * (UnitUpperTriangular(ones(n, n)) - I)
-
 function get_hamiltonian(W::AbstractMatrix)
     nbit = size(W, 1)
     ab = Any[]
@@ -53,52 +46,49 @@ function get_hamiltonian(W::AbstractMatrix)
     sum(ab)
 end
 
-hamil = get_hamiltonian(W);
-
 function evaluate_hamiltonian(i)
     print(i);
     print(" ")
     expect(hamil, zero_state(n_qubits) |> list_circuits[i])
 end
 
-state = zero_state(n_qubits) |> list_circuits[1];
 
+# ============ Get state preparation circuits ==========
+
+n_clifford_circuits = max(getNumberOfSymplecticCliffords(n), 2^63-1)
+list_circuits = [getRandomCircuit(i) for i in 1:n_circuits];
+
+# ==================== Get energies ====================
+
+W = 1/n * (UnitUpperTriangular(ones(n, n)) - I)
+hamil = get_hamiltonian(W);
 energies = evaluate_hamiltonian.(1:n_circuits);
 
-hist(energies, normed=true);
+# ============== Get variational circuit ===============
 
 v_unitary = variational_circuit(n);
-v_circuit = chain(n+1, 1=>H, control(1, 2:n+1=>v_unitary), 1=>H);
-total_circuits = [chain(n+1, concentrate(n+1, sp, 2:n+1), v_circuit) for sp in list_circuits];
+dispatch!.(v_unitary, :random);
+v_circuit = chain(n+1, put(1=>H), control(1, 2:n+1=>v_unitary), put(1=>H));
+total_circuits = [chain(n+1, concentrate(n+1, circuit, 2:n+1), v_circuit) for circuit in list_circuits];
 
+# Test: Compute the gradient of the first circuit
+grad_input, grad_params = expect'(put(n+1, 1=>Z), zero_state(n+1) => total_circuits[1]);
 
+# ============== Training ===============
 
+# optimizer = Adam(lr=0.01)
+# params = parameters(v_unitary)
+# niter = 100
 
+# for i = 1:n_circuits
+#     params = parameters(v_unitary)
 
+#     grad_input, grad_params = expect'(put(n+1, 1=>Z), zero_state(n+1) => total_circuits[i])
+#     grad_input *= (1=>Z, zero_state(n+1) => total_circuits[i]) - energies[i]
 
-function loss(real_energy, predicted_energy)
-    return 1/2 * (real_energy - predicted_energy)^2
-end
-
-optimizer = Adam(lr=0.01)
-params = parameters(v_unitary)
-niter = 100
-
-for i = 1:niter
-    ## `expect'` gives the gradient of an observable.
-    grad_input, grad_params = expect'(put(n+1, 1=>Z), zero_state(n+1) => total_circuits[i])
-    grad_input *= (1=>Z, zero_state(n+1) => total_circuits[i]) - energies[i]
-
-    ## feed the gradients into the circuit.
-    dispatch!(c, update!(params, grad_params, optimizer))
-    println("Step $i, Energy = $(expect(hami, zero_state(N) |> c))")
-    "$(expect(1=>Z, zero_state(n+1) => total_circuits[i]))"
-end
-
-YaoBlocks.expect'
-
-total_circuits[1]|>typeof
-
-methods(expect')
-
+#     ## feed the gradients into the circuit.
+#     dispatch!(list_circuits[i], update!(params, grad_params, optimizer))
+#     println("Step $i, Energy = $(expect(hami, zero_state(N) |> c))")
+#     "$(expect(1=>Z, zero_state(n+1) => total_circuits[i]))"
+# end
 
